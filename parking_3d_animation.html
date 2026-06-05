@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Smart Car Parking System — 3D Animation</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a1a; font-family: 'Arial', sans-serif; overflow: hidden; }
+  #canvas-container { width: 100vw; height: 100vh; position: relative; }
+  canvas { display: block; }
+
+  #ui {
+    position: absolute;
+    top: 20px; right: 20px;
+    background: rgba(0,10,30,0.88);
+    border: 1px solid #2E75B6;
+    border-radius: 12px;
+    padding: 18px 22px;
+    color: #fff;
+    min-width: 220px;
+    backdrop-filter: blur(8px);
+    box-shadow: 0 0 30px rgba(46,117,182,0.3);
+  }
+  #ui h2 { font-size: 14px; color: #7ec8ff; margin-bottom: 12px; letter-spacing: 1px; text-transform: uppercase; }
+  .lcd {
+    background: #1a2a00;
+    border: 2px solid #556b00;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+    color: #d4ff00;
+    margin-bottom: 14px;
+    min-height: 48px;
+    text-shadow: 0 0 6px #a0c000;
+  }
+  .slots-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 14px; }
+  .slot-indicator {
+    background: rgba(255,255,255,0.05);
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 12px;
+    text-align: center;
+    border: 1px solid #333;
+    transition: all 0.4s;
+  }
+  .slot-indicator.free { border-color: #00cc44; color: #00cc44; background: rgba(0,200,68,0.1); }
+  .slot-indicator.occupied { border-color: #cc2200; color: #ff4422; background: rgba(200,34,0,0.1); }
+  .buttons { display: flex; gap: 8px; }
+  button {
+    flex: 1;
+    padding: 9px 6px;
+    border: 1px solid #2E75B6;
+    background: rgba(46,117,182,0.15);
+    color: #7ec8ff;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 11px;
+    transition: all 0.2s;
+    letter-spacing: 0.5px;
+  }
+  button:hover { background: rgba(46,117,182,0.4); color: #fff; }
+  button:active { transform: scale(0.97); }
+  .led-row { display: flex; gap: 10px; margin-bottom: 14px; align-items: center; }
+  .led { width: 14px; height: 14px; border-radius: 50%; border: 1px solid #333; }
+  .led.green { background: #00cc44; box-shadow: 0 0 10px #00cc44; }
+  .led.red { background: #cc2200; box-shadow: 0 0 10px #cc2200; }
+  .led.off { background: #222; box-shadow: none; }
+  .led-label { font-size: 11px; color: #aaa; }
+  #title-banner {
+    position: absolute; top: 20px; left: 20px;
+    background: rgba(0,10,30,0.85);
+    border: 1px solid #2E75B6;
+    border-radius: 10px;
+    padding: 12px 20px;
+    backdrop-filter: blur(8px);
+  }
+  #title-banner h1 { font-size: 16px; color: #7ec8ff; letter-spacing: 1px; }
+  #title-banner p { font-size: 11px; color: #aaa; margin-top: 2px; }
+  #status-bar {
+    position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,10,30,0.85);
+    border: 1px solid #2E75B6;
+    border-radius: 8px;
+    padding: 8px 20px;
+    color: #7ec8ff;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    backdrop-filter: blur(8px);
+  }
+</style>
+</head>
+<body>
+<div id="canvas-container">
+  <div id="title-banner">
+    <h1>🚗 SMART CAR PARKING SYSTEM</h1>
+    <p>Arduino UNO | IR Sensors | Servo Gate | LCD Display | LPU ECE Project</p>
+  </div>
+
+  <div id="ui">
+    <h2>📟 System Panel</h2>
+    <div class="lcd" id="lcd-display">ARDUINO<br>PARKING SYSTEM</div>
+    <div class="led-row">
+      <div class="led green" id="led-green"></div><span class="led-label">Green LED</span>
+      <div style="margin-left:8px"></div>
+      <div class="led off" id="led-red"></div><span class="led-label">Red LED</span>
+      <div style="margin-left:8px"></div>
+      <div style="font-size:18px" id="buzzer-icon">🔇</div>
+    </div>
+    <div class="slots-grid" id="slots-grid"></div>
+    <div class="buttons">
+      <button onclick="triggerEntry()">🚗 Car In</button>
+      <button onclick="triggerExit()">🚙 Car Out</button>
+    </div>
+  </div>
+
+  <div id="status-bar" id="status">🟢 System Ready — Slot Left: 4 | Drag to rotate view</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ── STATE ──
+const MAX = 4;
+let slots = MAX;
+let gateAngle = 0;      // 0 = closed, 1 = open
+let gateTarget = 0;
+let occupied = [false, false, false, false];
+let cars3d = [];
+let animating = false;
+let carInScene = null;
+let scene, camera, renderer, gate, gatePivot;
+let lcdLines = ["ARDUINO", "PARKING SYSTEM"];
+
+// ── THREE.JS SETUP ──
+scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0a1a);
+scene.fog = new THREE.Fog(0x0a0a1a, 30, 80);
+
+camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 200);
+camera.position.set(14, 12, 18);
+camera.lookAt(0, 0, 0);
+
+renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+// ── LIGHTS ──
+const ambient = new THREE.AmbientLight(0x334466, 0.8);
+scene.add(ambient);
+const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+sun.position.set(15, 20, 10);
+sun.castShadow = true;
+sun.shadow.mapSize.width = 2048;
+sun.shadow.mapSize.height = 2048;
+scene.add(sun);
+const fill = new THREE.DirectionalLight(0x4488cc, 0.4);
+fill.position.set(-10, 5, -5);
+scene.add(fill);
+
+// ── HELPERS ──
+function box(w, h, d, color, x, y, z, rx=0, ry=0) {
+  const g = new THREE.BoxGeometry(w, h, d);
+  const m = new THREE.MeshLambertMaterial({ color });
+  const mesh = new THREE.Mesh(g, m);
+  mesh.position.set(x, y, z);
+  mesh.rotation.set(rx, ry, 0);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  scene.add(mesh);
+  return mesh;
+}
+function cylinder(r, h, color, x, y, z) {
+  const g = new THREE.CylinderGeometry(r, r, h, 16);
+  const m = new THREE.MeshLambertMaterial({ color });
+  const mesh = new THREE.Mesh(g, m);
+  mesh.position.set(x, y, z);
+  mesh.castShadow = true;
+  scene.add(mesh);
+  return mesh;
+}
+
+// ── GROUND ──
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(60, 60),
+  new THREE.MeshLambertMaterial({ color: 0x1a1a2e })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// Road markings
+for (let i = -3; i <= 3; i++) {
+  if (i !== 0) {
+    const stripe = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.2, 8),
+      new THREE.MeshLambertMaterial({ color: 0xffff00 })
+    );
+    stripe.rotation.x = -Math.PI / 2;
+    stripe.position.set(i * 1.5, 0.01, -5);
+    scene.add(stripe);
+  }
+}
+
+// ── PARKING LOT BASE ──
+const lot = box(18, 0.15, 14, 0x222244, 3, 0.07, 3);
+
+// Parking slot lines
+for (let i = 0; i < 5; i++) {
+  const line = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.08, 10),
+    new THREE.MeshLambertMaterial({ color: 0xffffff })
+  );
+  line.rotation.x = -Math.PI / 2;
+  line.position.set(-4 + i * 3.5, 0.16, 5);
+  scene.add(line);
+}
+for (let i = 0; i < 4; i++) {
+  const label = new THREE.Mesh(
+    new THREE.PlaneGeometry(3, 0.08),
+    new THREE.MeshLambertMaterial({ color: 0xffffff })
+  );
+  label.rotation.x = -Math.PI / 2;
+  label.position.set(-2.25 + i * 3.5, 0.16, 1.5);
+  scene.add(label);
+}
+
+// ── SLOT INDICATORS (small poles with LED lights) ──
+const slotLights = [];
+for (let i = 0; i < 4; i++) {
+  const pole = cylinder(0.06, 1.2, 0x888888, -2.25 + i * 3.5, 0.6, 2);
+  const lightMat = new THREE.MeshBasicMaterial({ color: 0x00cc44 });
+  const lightBall = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 8), lightMat);
+  lightBall.position.set(-2.25 + i * 3.5, 1.3, 2);
+  scene.add(lightBall);
+  slotLights.push({ mesh: lightBall, mat: lightMat });
+  // Slot number
+}
+
+// ── WALLS ──
+box(18, 2, 0.3, 0x334466, 3, 1, 10.15);  // back wall
+box(0.3, 2, 14, 0x334466, -6, 1, 3);     // left wall
+box(0.3, 2, 14, 0x334466, 12, 1, 3);     // right wall
+
+// ── ROOF PILLARS ──
+const pillarPositions = [[-5.7,2.5,-0.5],[11.7,2.5,-0.5],[-5.7,2.5,9.5],[11.7,2.5,9.5]];
+pillarPositions.forEach(([x,y,z]) => cylinder(0.15, 5, 0x334466, x, y, z));
+
+// Roof beams
+box(18, 0.2, 0.3, 0x2255aa, 3, 5, -0.5);
+box(18, 0.2, 0.3, 0x2255aa, 3, 5, 9.5);
+box(0.3, 0.2, 10.2, 0x2255aa, -5.7, 5, 4.5);
+box(0.3, 0.2, 10.2, 0x2255aa, 11.7, 5, 4.5);
+
+// ── GATE STRUCTURE ──
+// Entry lane
+box(0.3, 3, 0.3, 0x888888, -4, 1.5, -1);   // left post
+box(0.3, 3, 0.3, 0x888888, 0, 1.5, -1);    // right post
+box(4.3, 0.2, 0.3, 0x555588, -2, 3.1, -1); // crossbar
+
+// Arduino board (decorative)
+const arduinoMat = new THREE.MeshLambertMaterial({ color: 0x1a6b8a });
+const arduino = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.1, 2), arduinoMat);
+arduino.position.set(-7, 1.1, 0);
+scene.add(arduino);
+// LCD
+const lcdMat = new THREE.MeshBasicMaterial({ color: 0x99cc00 });
+const lcdMesh = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.05, 0.6), lcdMat);
+lcdMesh.position.set(-7.2, 1.2, -1.5);
+scene.add(lcdMesh);
+
+// IR sensors
+[[0.3, 0.4, -2.5], [0.3, 0.4, 0.5]].forEach(([ox, oy, oz]) => {
+  const ir = new THREE.Mesh(
+    new THREE.BoxGeometry(0.3, 0.2, 0.15),
+    new THREE.MeshLambertMaterial({ color: 0x223366 })
+  );
+  ir.position.set(-4 + ox, oy, oz);
+  scene.add(ir);
+  // IR LED eye
+  const eye = new THREE.Mesh(
+    new THREE.SphereGeometry(0.06, 6, 6),
+    new THREE.MeshBasicMaterial({ color: 0xff3300 })
+  );
+  eye.position.set(-4 + ox, oy + 0.1, oz - 0.1);
+  scene.add(eye);
+});
+
+// ── GATE ARM ──
+gatePivot = new THREE.Group();
+gatePivot.position.set(-3.8, 1.2, -1);
+scene.add(gatePivot);
+
+// Striped gate arm
+const segCount = 6;
+for (let i = 0; i < segCount; i++) {
+  const seg = new THREE.Mesh(
+    new THREE.BoxGeometry(0.5, 0.12, 0.12),
+    new THREE.MeshLambertMaterial({ color: i % 2 === 0 ? 0xff2222 : 0xffffff })
+  );
+  seg.position.set(0.25 + i * 0.5, 0, 0);
+  gatePivot.add(seg);
+}
+
+// ── LED INDICATORS on wall ──
+const greenLedMesh = new THREE.Mesh(
+  new THREE.SphereGeometry(0.12, 8, 8),
+  new THREE.MeshBasicMaterial({ color: 0x00ff44 })
+);
+greenLedMesh.position.set(-6.8, 2, -0.5);
+scene.add(greenLedMesh);
+
+const redLedMesh = new THREE.Mesh(
+  new THREE.SphereGeometry(0.12, 8, 8),
+  new THREE.MeshBasicMaterial({ color: 0x222222 })
+);
+redLedMesh.position.set(-6.5, 2, -0.5);
+scene.add(redLedMesh);
+
+// ── CAR FACTORY ──
+const carColors = [0xff4422, 0x2244ff, 0xffcc00, 0x22cc44, 0xcc44ff, 0xff8800];
+let carColorIdx = 0;
+
+function makeCar(color) {
+  const g = new THREE.Group();
+  // Body
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(1.4, 0.5, 2.5),
+    new THREE.MeshLambertMaterial({ color })
+  );
+  body.position.y = 0.35;
+  g.add(body);
+  // Roof
+  const roof = new THREE.Mesh(
+    new THREE.BoxGeometry(1.1, 0.4, 1.4),
+    new THREE.MeshLambertMaterial({ color })
+  );
+  roof.position.set(0, 0.8, 0.1);
+  g.add(roof);
+  // Windshield
+  const wind = new THREE.Mesh(
+    new THREE.BoxGeometry(1.0, 0.35, 0.05),
+    new THREE.MeshLambertMaterial({ color: 0x88ccff, transparent: true, opacity: 0.7 })
+  );
+  wind.position.set(0, 0.82, -0.73);
+  g.add(wind);
+  // Wheels
+  const wheelPos = [[-0.7, 0.15, 0.8], [0.7, 0.15, 0.8], [-0.7, 0.15, -0.8], [0.7, 0.15, -0.8]];
+  wheelPos.forEach(([x,y,z]) => {
+    const w = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.22, 0.22, 0.18, 12),
+      new THREE.MeshLambertMaterial({ color: 0x111111 })
+    );
+    w.rotation.z = Math.PI / 2;
+    w.position.set(x, y, z);
+    g.add(w);
+  });
+  g.castShadow = true;
+  return g;
+}
+
+// Pre-place cars in first 2 slots
+function placeCar(slotIdx) {
+  const car = makeCar(carColors[carColorIdx % carColors.length]);
+  carColorIdx++;
+  car.position.set(-2.25 + slotIdx * 3.5, 0, 5);
+  scene.add(car);
+  cars3d[slotIdx] = car;
+  occupied[slotIdx] = true;
+}
+
+// ── UI UPDATE ──
+function updateUI() {
+  // LCD
+  document.getElementById('lcd-display').innerHTML = lcdLines[0] + '<br>' + lcdLines[1];
+
+  // Slot indicators
+  const grid = document.getElementById('slots-grid');
+  grid.innerHTML = '';
+  for (let i = 0; i < 4; i++) {
+    const d = document.createElement('div');
+    d.className = 'slot-indicator ' + (occupied[i] ? 'occupied' : 'free');
+    d.textContent = 'Slot-' + (i+1) + ' ' + (occupied[i] ? '🔴' : '🟢');
+    grid.appendChild(d);
+  }
+
+  // LEDs
+  const glElem = document.getElementById('led-green');
+  const rlElem = document.getElementById('led-red');
+  const buz = document.getElementById('buzzer-icon');
+
+  if (slots > 0) {
+    glElem.className = 'led green';
+    rlElem.className = 'led off';
+    greenLedMesh.material.color.setHex(0x00ff44);
+    greenLedMesh.material.emissive = new THREE.Color(0x00ff44);
+    redLedMesh.material.color.setHex(0x220000);
+    buz.textContent = '🔇';
+  } else {
+    glElem.className = 'led off';
+    rlElem.className = 'led red';
+    greenLedMesh.material.color.setHex(0x002200);
+    redLedMesh.material.color.setHex(0xff2200);
+    buz.textContent = '🔊';
+  }
+
+  // 3D slot lights
+  for (let i = 0; i < 4; i++) {
+    slotLights[i].mat.color.setHex(occupied[i] ? 0xcc2200 : 0x00cc44);
+  }
+
+  // Status bar
+  document.getElementById('status-bar').textContent =
+    (slots > 0 ? '🟢' : '🔴') + ' ' + lcdLines[0] + ' | ' + lcdLines[1] + ' | Drag to rotate view';
+}
+
+// ── ENTRY TRIGGER ──
+function triggerEntry() {
+  if (animating) return;
+  animating = true;
+
+  if (slots > 0) {
+    // Find free slot
+    const freeSlot = occupied.indexOf(false);
+    lcdLines = ["CAR ENTERED", "Slot Left: " + (slots - 1)];
+    updateUI();
+
+    // Open gate
+    gateTarget = 1;
+
+    // Create moving car
+    const newCar = makeCar(carColors[carColorIdx % carColors.length]);
+    carColorIdx++;
+    newCar.position.set(-2.25 + freeSlot * 3.5, 0, -8);
+    newCar.rotation.y = Math.PI;  // facing into lot
+    scene.add(newCar);
+
+    let t = 0;
+    const startZ = -8;
+    const endZ = 5;
+    let phase = 'enter'; // enter → park → done
+
+    const entryInterval = setInterval(() => {
+      t += 0.025;
+      if (phase === 'enter') {
+        newCar.position.z = startZ + (endZ - startZ) * Math.min(t, 1);
+        if (t >= 1) {
+          phase = 'done';
+          slots--;
+          occupied[freeSlot] = true;
+          cars3d[freeSlot] = newCar;
+          gateTarget = 0;
+          setTimeout(() => {
+            lcdLines = ["    WELCOME!    ", "Slot Left:" + slots + "   "];
+            updateUI();
+            animating = false;
+          }, 1000);
+          clearInterval(entryInterval);
+          updateUI();
+        }
+      }
+    }, 30);
+
+  } else {
+    lcdLines = ["SORRY :(", "Parking Full"];
+    updateUI();
+    setTimeout(() => {
+      lcdLines = ["    WELCOME!    ", "Slot Left:0   "];
+      updateUI();
+      animating = false;
+    }, 2500);
+  }
+}
+
+// ── EXIT TRIGGER ──
+function triggerExit() {
+  if (animating) return;
+  if (slots >= MAX) return;
+  animating = true;
+
+  // Find occupied slot
+  const occupiedSlot = occupied.lastIndexOf(true);
+  slots++;
+  occupied[occupiedSlot] = false;
+  lcdLines = ["CAR EXITED", "Slot Left: " + slots];
+  updateUI();
+
+  // Open exit gate
+  gateTarget = 1;
+
+  const carToMove = cars3d[occupiedSlot];
+  cars3d[occupiedSlot] = null;
+
+  let t = 0;
+  const startZ = 5;
+  const endZ = 14;
+
+  const exitInterval = setInterval(() => {
+    t += 0.025;
+    carToMove.position.z = startZ + (endZ - startZ) * Math.min(t, 1);
+    if (t >= 1) {
+      scene.remove(carToMove);
+      gateTarget = 0;
+      setTimeout(() => {
+        lcdLines = ["    WELCOME!    ", "Slot Left:" + slots + "   "];
+        updateUI();
+        animating = false;
+      }, 1000);
+      clearInterval(exitInterval);
+    }
+  }, 30);
+}
+
+// ── ORBIT CONTROLS (manual) ──
+let isDragging = false, prevX = 0, prevY = 0;
+let theta = 0.8, phi = 0.5, radius = 28;
+document.addEventListener('mousedown', e => { isDragging = true; prevX = e.clientX; prevY = e.clientY; });
+document.addEventListener('mouseup', () => isDragging = false);
+document.addEventListener('mousemove', e => {
+  if (!isDragging) return;
+  theta -= (e.clientX - prevX) * 0.005;
+  phi = Math.max(0.1, Math.min(1.4, phi - (e.clientY - prevY) * 0.005));
+  prevX = e.clientX; prevY = e.clientY;
+  camera.position.set(
+    radius * Math.sin(theta) * Math.cos(phi),
+    radius * Math.sin(phi),
+    radius * Math.cos(theta) * Math.cos(phi)
+  );
+  camera.lookAt(0, 1, 3);
+});
+document.addEventListener('wheel', e => {
+  radius = Math.max(10, Math.min(50, radius + e.deltaY * 0.05));
+});
+
+// Touch support
+document.addEventListener('touchstart', e => {
+  isDragging = true;
+  prevX = e.touches[0].clientX;
+  prevY = e.touches[0].clientY;
+}, { passive: true });
+document.addEventListener('touchend', () => isDragging = false);
+document.addEventListener('touchmove', e => {
+  if (!isDragging) return;
+  theta -= (e.touches[0].clientX - prevX) * 0.005;
+  phi = Math.max(0.1, Math.min(1.4, phi - (e.touches[0].clientY - prevY) * 0.005));
+  prevX = e.touches[0].clientX;
+  prevY = e.touches[0].clientY;
+  camera.position.set(
+    radius * Math.sin(theta) * Math.cos(phi),
+    radius * Math.sin(phi),
+    radius * Math.cos(theta) * Math.cos(phi)
+  );
+  camera.lookAt(0, 1, 3);
+}, { passive: true });
+
+// ── RESIZE ──
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ── ANIMATE ──
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+
+  // Animate gate
+  gateAngle += (gateTarget - gateAngle) * 0.08;
+  gatePivot.rotation.y = gateAngle * (-Math.PI / 2);
+
+  // Subtle pulse on LCD
+  lcdMesh.material.color.setHSL(0.2, 0.8, 0.4 + 0.05 * Math.sin(t * 2));
+
+  renderer.render(scene, camera);
+}
+
+// ── INIT ──
+lcdLines = ["    WELCOME!    ", "Slot Left:" + slots + "   "];
+updateUI();
+camera.position.set(
+  radius * Math.sin(theta) * Math.cos(phi),
+  radius * Math.sin(phi),
+  radius * Math.cos(theta) * Math.cos(phi)
+);
+camera.lookAt(0, 1, 3);
+animate();
+</script>
+</body>
+</html>
